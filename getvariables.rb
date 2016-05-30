@@ -2,24 +2,83 @@
 require 'net/https'
 require 'json'
 
+class FetchAmiIds
+  RELEASES_TABLE_URL =
+    'https://cloud-images.ubuntu.com/locator/ec2/releasesTable'.freeze
 
-uri = URI.parse("https://cloud-images.ubuntu.com/locator/ec2/releasesTable")
-http = Net::HTTP.new(uri.host, uri.port)
-http.use_ssl = (uri.scheme == 'https')
-request = Net::HTTP::Get.new(uri.request_uri)
+  KEYS = [
+    :region,
+    :suite,
+    :version,
+    :arch,
+    :type,
+    :date,
+    :ami,
+    :aki,
+    :launch
+  ].freeze
 
-resp = http.request(request).body
-resp.gsub!("],\n]\n}", ']]}')
-#                                                      region      distribution architecture hvm/pv                                  storagetype
-data = Hash[JSON.parse(resp)['aaData'].map { |tuple| ["#{tuple[0]}-#{tuple[1]}-#{tuple[3]}-#{tuple[4].match(/^hvm:/)?'hvm':'pv'}-#{tuple[4].gsub(/^hvm:/, '')}", tuple[6].gsub(/.*>(ami-[^<]*)<.*/, '\1')] }]
-output = {
-  "variable" => {
-    "all_amis" => {
-      "description" => "The AMI to use",
-      "default" => data
+  def self.call
+    new.call
+  end
+
+  def initialize
+    @http = Net::HTTP.new(uri.host, uri.port)
+    @http.use_ssl = (uri.scheme == 'https')
+  end
+
+  def call
+    puts JSON.pretty_generate(output)
+  end
+
+  private
+
+  def output
+    {
+      'variable' => {
+        'all_amis' => {
+          'description' => 'The AMI to use',
+          'default' => formatted_ami_list
+        }
+      }
     }
-  }
-}
+  end
 
-puts JSON.pretty_generate(output)
+  def formatted_ami_list
+    keyed_data.map { |hash| "#{hash[:desc]}: #{hash[:ami_id]}" }
+  end
 
+  def keyed_data
+    data.map do |item|
+      KEYS.zip(item).to_h
+    end.map do |h|
+      {
+        desc: "#{h[:region]}-#{h[:suite]}-#{h[:arch]}-#{h[:type]}",
+        ami_id: ami_id(h[:ami])
+      }
+    end
+  end
+
+  def data
+    @data ||= resp.gsub!("],\n]\n}", ']]}')
+    JSON.parse(@data)['aaData']
+  end
+
+  def ami_id(string)
+    string.gsub(/.*>(ami-\w+)<.*/, '\1')
+  end
+
+  def uri
+    URI.parse(RELEASES_TABLE_URL)
+  end
+
+  def request
+    Net::HTTP::Get.new(uri.request_uri)
+  end
+
+  def resp
+    @http.request(request).body
+  end
+end
+
+FetchAmiIds.call
